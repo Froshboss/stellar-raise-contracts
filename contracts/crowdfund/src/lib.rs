@@ -48,6 +48,19 @@ pub enum DataKey {
     Roadmap,
 }
 
+// ── Contract Error ──────────────────────────────────────────────────────────
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ContractError {
+    AlreadyInitialized = 1,
+    CampaignEnded = 2,
+    CampaignStillActive = 3,
+    GoalNotReached = 4,
+    GoalReached = 5,
+}
+
 // ── Contract ────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -73,7 +86,7 @@ impl CrowdfundContract {
     ) {
         // Prevent re-initialization.
         if env.storage().instance().has(&DataKey::Creator) {
-            panic!("already initialized");
+            return Err(ContractError::AlreadyInitialized);
         }
 
         creator.require_auth();
@@ -101,7 +114,7 @@ impl CrowdfundContract {
     ///
     /// The contributor must authorize the call. Contributions are rejected
     /// after the deadline has passed.
-    pub fn contribute(env: Env, contributor: Address, amount: i128) {
+    pub fn contribute(env: Env, contributor: Address, amount: i128) -> Result<(), ContractError> {
         contributor.require_auth();
 
         let min_contribution: i128 = env.storage().instance().get(&DataKey::MinContribution).unwrap();
@@ -111,7 +124,7 @@ impl CrowdfundContract {
 
         let deadline: u64 = env.storage().instance().get(&DataKey::Deadline).unwrap();
         if env.ledger().timestamp() > deadline {
-            panic!("campaign has ended");
+            return Err(ContractError::CampaignEnded);
         }
 
         let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
@@ -163,6 +176,8 @@ impl CrowdfundContract {
                 .persistent()
                 .extend_ttl(&DataKey::Contributors, 100, 100);
         }
+
+        Ok(())
     }
 
     /// Withdraw raised funds — only callable by the creator after the
@@ -178,13 +193,13 @@ impl CrowdfundContract {
 
         let deadline: u64 = env.storage().instance().get(&DataKey::Deadline).unwrap();
         if env.ledger().timestamp() <= deadline {
-            panic!("campaign is still active");
+            return Err(ContractError::CampaignStillActive);
         }
 
         let goal: i128 = env.storage().instance().get(&DataKey::Goal).unwrap();
         let total: i128 = env.storage().instance().get(&DataKey::TotalRaised).unwrap();
         if total < goal {
-            panic!("goal not reached");
+            return Err(ContractError::GoalNotReached);
         }
 
         let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
@@ -206,13 +221,13 @@ impl CrowdfundContract {
 
         let deadline: u64 = env.storage().instance().get(&DataKey::Deadline).unwrap();
         if env.ledger().timestamp() <= deadline {
-            panic!("campaign is still active");
+            return Err(ContractError::CampaignStillActive);
         }
 
         let goal: i128 = env.storage().instance().get(&DataKey::Goal).unwrap();
         let total: i128 = env.storage().instance().get(&DataKey::TotalRaised).unwrap();
         if total >= goal {
-            panic!("goal was reached; use withdraw instead");
+            return Err(ContractError::GoalReached);
         }
 
         let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
