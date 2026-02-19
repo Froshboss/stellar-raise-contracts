@@ -46,6 +46,10 @@ pub enum DataKey {
     MinContribution,
     /// List of roadmap items with dates and descriptions.
     Roadmap,
+    /// Platform fee in basis points (e.g., 250 = 2.5%).
+    PlatformFeePercent,
+    /// Platform address to receive fees.
+    PlatformAddress,
 }
 
 // ── Contract ────────────────────────────────────────────────────────────────
@@ -58,11 +62,17 @@ impl CrowdfundContract {
     /// Initializes a new crowdfunding campaign.
     ///
     /// # Arguments
-    /// * `creator`          – The campaign creator's address.
-    /// * `token`            – The token contract address used for contributions.
-    /// * `goal`             – The funding goal (in the token's smallest unit).
-    /// * `deadline`         – The campaign deadline as a ledger timestamp.
-    /// * `min_contribution` – The minimum contribution amount.
+    /// * `creator`            – The campaign creator's address.
+    /// * `token`              – The token contract address used for contributions.
+    /// * `goal`               – The funding goal (in the token's smallest unit).
+    /// * `deadline`           – The campaign deadline as a ledger timestamp.
+    /// * `min_contribution`   – The minimum contribution amount.
+    /// * `platform_address`   – Optional platform address to receive fees.
+    /// * `platform_fee_bps`   – Optional platform fee in basis points (e.g., 250 = 2.5%).
+    ///
+    /// # Panics
+    /// * If already initialized.
+    /// * If `platform_fee_bps` is provided and exceeds 10,000 (100%).
     pub fn initialize(
         env: Env,
         creator: Address,
@@ -70,6 +80,8 @@ impl CrowdfundContract {
         goal: i128,
         deadline: u64,
         min_contribution: i128,
+        platform_address: Option<Address>,
+        platform_fee_bps: Option<u32>,
     ) {
         // Prevent re-initialization.
         if env.storage().instance().has(&DataKey::Creator) {
@@ -78,13 +90,36 @@ impl CrowdfundContract {
 
         creator.require_auth();
 
+        // Validate platform fee if provided.
+        if let Some(fee_bps) = platform_fee_bps {
+            if fee_bps > 10_000 {
+                panic!("platform fee cannot exceed 100%");
+            }
+        }
+
         env.storage().instance().set(&DataKey::Creator, &creator);
         env.storage().instance().set(&DataKey::Token, &token);
         env.storage().instance().set(&DataKey::Goal, &goal);
         env.storage().instance().set(&DataKey::Deadline, &deadline);
-        env.storage().instance().set(&DataKey::MinContribution, &min_contribution);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinContribution, &min_contribution);
         env.storage().instance().set(&DataKey::TotalRaised, &0i128);
-        env.storage().instance().set(&DataKey::Status, &Status::Active);
+        env.storage()
+            .instance()
+            .set(&DataKey::Status, &Status::Active);
+
+        // Store platform fee configuration if provided.
+        if let Some(fee_bps) = platform_fee_bps {
+            env.storage()
+                .instance()
+                .set(&DataKey::PlatformFeePercent, &fee_bps);
+        }
+        if let Some(platform) = platform_address {
+            env.storage()
+                .instance()
+                .set(&DataKey::PlatformAddress, &platform);
+        }
 
         let empty_contributors: Vec<Address> = Vec::new(&env);
         env.storage()
@@ -104,7 +139,11 @@ impl CrowdfundContract {
     pub fn contribute(env: Env, contributor: Address, amount: i128) {
         contributor.require_auth();
 
-        let min_contribution: i128 = env.storage().instance().get(&DataKey::MinContribution).unwrap();
+        let min_contribution: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinContribution)
+            .unwrap();
         if amount < min_contribution {
             panic!("amount below minimum");
         }
@@ -118,11 +157,7 @@ impl CrowdfundContract {
         let token_client = token::Client::new(&env, &token_address);
 
         // Transfer tokens from the contributor to this contract.
-        token_client.transfer(
-            &contributor,
-            &env.current_contract_address(),
-            &amount,
-        );
+        token_client.transfer(&contributor, &env.current_contract_address(), &amount);
 
         // Update the contributor's running total.
         let prev: i128 = env
@@ -130,16 +165,13 @@ impl CrowdfundContract {
             .instance()
             .get(&DataKey::Contribution(contributor.clone()))
             .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&DataKey::Contribution(contributor.clone()), &(prev + amount));
+        env.storage().instance().set(
+            &DataKey::Contribution(contributor.clone()),
+            &(prev + amount),
+        );
 
         // Update the global total raised.
-        let total: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TotalRaised)
-            .unwrap();
+        let total: i128 = env.storage().instance().get(&DataKey::TotalRaised).unwrap();
         env.storage()
             .instance()
             .set(&DataKey::TotalRaised, &(total + amount));
@@ -160,6 +192,9 @@ impl CrowdfundContract {
 
     /// Withdraw raised funds — only callable by the creator after the
     /// deadline, and only if the goal has been met.
+    ///
+    /// If a platform fee is configured, deducts the fee and transfers it to
+    /// the platform address, then sends the remainder to the creator.
     pub fn withdraw(env: Env) {
         let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
         if status != Status::Active {
@@ -183,10 +218,41 @@ impl CrowdfundContract {
         let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let token_client = token::Client::new(&env, &token_address);
 
-        token_client.transfer(&env.current_contract_address(), &creator, &total);
+        // Calculate and transfer platform fee if configured.
+        let platform_fee_bps: Option<u32> =
+            env.storage().instance().get(&DataKey::PlatformFeePercent);
+        let platform_address: Option<Address> =
+            env.storage().instance().get(&DataKey::PlatformAddress);
+
+        let creator_payout =
+            if let (Some(fee_bps), Some(platform)) = (platform_fee_bps, platform_address) {
+                // Calculate fee using checked arithmetic to prevent overflow.
+                let fee = total
+                    .checked_mul(fee_bps as i128)
+                    .expect("fee calculation overflow")
+                    .checked_div(10_000)
+                    .expect("fee division by zero");
+
+                // Transfer fee to platform.
+                token_client.transfer(&env.current_contract_address(), &platform, &fee);
+
+                // Emit event with fee details.
+                env.events()
+                    .publish(("campaign", "fee_transferred"), (&platform, fee));
+
+                // Calculate creator payout.
+                total.checked_sub(fee).expect("creator payout underflow")
+            } else {
+                total
+            };
+
+        // Transfer remainder to creator.
+        token_client.transfer(&env.current_contract_address(), &creator, &creator_payout);
 
         env.storage().instance().set(&DataKey::TotalRaised, &0i128);
-        env.storage().instance().set(&DataKey::Status, &Status::Successful);
+        env.storage()
+            .instance()
+            .set(&DataKey::Status, &Status::Successful);
     }
 
     /// Refund all contributors — callable by anyone after the deadline
@@ -224,11 +290,7 @@ impl CrowdfundContract {
                 .get(&DataKey::Contribution(contributor.clone()))
                 .unwrap_or(0);
             if amount > 0 {
-                token_client.transfer(
-                    &env.current_contract_address(),
-                    &contributor,
-                    &amount,
-                );
+                token_client.transfer(&env.current_contract_address(), &contributor, &amount);
                 env.storage()
                     .instance()
                     .set(&DataKey::Contribution(contributor), &0i128);
@@ -236,7 +298,9 @@ impl CrowdfundContract {
         }
 
         env.storage().instance().set(&DataKey::TotalRaised, &0i128);
-        env.storage().instance().set(&DataKey::Status, &Status::Refunded);
+        env.storage()
+            .instance()
+            .set(&DataKey::Status, &Status::Refunded);
     }
 
     /// Cancel the campaign and refund all contributors — callable only by
@@ -266,11 +330,7 @@ impl CrowdfundContract {
                 .get(&DataKey::Contribution(contributor.clone()))
                 .unwrap_or(0);
             if amount > 0 {
-                token_client.transfer(
-                    &env.current_contract_address(),
-                    &contributor,
-                    &amount,
-                );
+                token_client.transfer(&env.current_contract_address(), &contributor, &amount);
                 env.storage()
                     .instance()
                     .set(&DataKey::Contribution(contributor), &0i128);
@@ -278,7 +338,9 @@ impl CrowdfundContract {
         }
 
         env.storage().instance().set(&DataKey::TotalRaised, &0i128);
-        env.storage().instance().set(&DataKey::Status, &Status::Cancelled);
+        env.storage()
+            .instance()
+            .set(&DataKey::Status, &Status::Cancelled);
     }
 
     // ── View helpers ────────────────────────────────────────────────────
@@ -312,14 +374,10 @@ impl CrowdfundContract {
         };
 
         roadmap.push_back(item.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::Roadmap, &roadmap);
+        env.storage().instance().set(&DataKey::Roadmap, &roadmap);
 
-        env.events().publish(
-            ("campaign", "roadmap_item_added"),
-            (date, description),
-        );
+        env.events()
+            .publish(("campaign", "roadmap_item_added"), (date, description));
     }
 
     /// Returns the full ordered list of roadmap items.
@@ -356,6 +414,22 @@ impl CrowdfundContract {
 
     /// Returns the minimum contribution amount.
     pub fn min_contribution(env: Env) -> i128 {
-        env.storage().instance().get(&DataKey::MinContribution).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::MinContribution)
+            .unwrap()
+    }
+
+    /// Returns the platform fee in basis points, or 0 if not set.
+    pub fn platform_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::PlatformFeePercent)
+            .unwrap_or(0)
+    }
+
+    /// Returns the platform address, or None if not set.
+    pub fn platform_address(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PlatformAddress)
     }
 }
