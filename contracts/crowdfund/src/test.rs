@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::{Address as _, Ledger}, token, Address, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger}, token, Address, Env, Vec};
 
 use crate::{CrowdfundContract, CrowdfundContractClient};
 

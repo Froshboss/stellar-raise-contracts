@@ -168,7 +168,7 @@ impl CrowdfundContract {
             .get(&DataKey::Contributors)
             .unwrap();
         if !contributors.contains(&contributor) {
-            contributors.push_back(contributor);
+            contributors.push_back(contributor.clone());
             env.storage()
                 .persistent()
                 .set(&DataKey::Contributors, &contributors);
@@ -209,6 +209,12 @@ impl CrowdfundContract {
 
         env.storage().instance().set(&DataKey::TotalRaised, &0i128);
         env.storage().instance().set(&DataKey::Status, &Status::Successful);
+
+        // Emit withdrawal event
+        env.events().publish(
+            ("campaign", "withdrawn"),
+            (creator.clone(), total),
+        );
     }
 
     /// Refund all contributors — callable by anyone after the deadline
