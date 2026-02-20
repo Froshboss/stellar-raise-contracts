@@ -116,6 +116,7 @@ pub enum ContractError {
     CampaignStillActive = 3,
     GoalNotReached = 4,
     GoalReached = 5,
+    Overflow = 6,
 }
 
 // ── Contract ────────────────────────────────────────────────────────────────
@@ -214,25 +215,31 @@ impl CrowdfundContract {
         // Transfer tokens from the contributor to this contract.
         token_client.transfer(&contributor, &env.current_contract_address(), &amount);
 
-        // Update the contributor's running total.
+        // Update the contributor's running total with overflow protection.
         let contribution_key = DataKey::Contribution(contributor.clone());
         let prev: i128 = env
             .storage()
             .persistent()
             .get(&contribution_key)
             .unwrap_or(0);
+
+        let new_contribution = prev.checked_add(amount).ok_or(ContractError::Overflow)?;
+
         env.storage()
             .persistent()
-            .set(&contribution_key, &(prev + amount));
+            .set(&contribution_key, &new_contribution);
         env.storage()
             .persistent()
             .extend_ttl(&contribution_key, 100, 100);
 
-        // Update the global total raised.
+        // Update the global total raised with overflow protection.
         let total: i128 = env.storage().instance().get(&DataKey::TotalRaised).unwrap();
+
+        let new_total = total.checked_add(amount).ok_or(ContractError::Overflow)?;
+
         env.storage()
             .instance()
-            .set(&DataKey::TotalRaised, &(total + amount));
+            .set(&DataKey::TotalRaised, &new_total);
 
         // Track contributor address if new.
         let mut contributors: Vec<Address> = env
@@ -493,6 +500,46 @@ impl CrowdfundContract {
                 Symbol::new(&env, "metadata_updated"),
             ),
             updated_fields,
+        );
+    }
+
+    /// Update the campaign deadline — only callable by the creator while the
+    /// campaign is still Active.
+    ///
+    /// # Arguments
+    /// * `new_deadline` – The new deadline as a ledger timestamp (must be greater than current deadline).
+    ///
+    /// # Panics
+    /// * If the campaign is not Active.
+    /// * If new_deadline is less than or equal to the current deadline.
+    pub fn update_deadline(env: Env, new_deadline: u64) {
+        // Check campaign is active.
+        let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
+        if status != Status::Active {
+            panic!("campaign is not active");
+        }
+
+        // Require creator authentication.
+        let creator: Address = env.storage().instance().get(&DataKey::Creator).unwrap();
+        creator.require_auth();
+
+        // Get the current deadline.
+        let current_deadline: u64 = env.storage().instance().get(&DataKey::Deadline).unwrap();
+
+        // Ensure new_deadline is greater than current_deadline (only extensions allowed).
+        if new_deadline <= current_deadline {
+            panic!("new deadline must be after current deadline");
+        }
+
+        // Update the deadline.
+        env.storage()
+            .instance()
+            .set(&DataKey::Deadline, &new_deadline);
+
+        // Emit deadline_updated event with old and new deadline values.
+        env.events().publish(
+            ("campaign", "deadline_updated"),
+            (current_deadline, new_deadline),
         );
     }
 
