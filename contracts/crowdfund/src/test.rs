@@ -409,3 +409,16 @@ fn test_contribute_above_minimum() {
     assert_eq!(client.total_raised(), 50_000);
     assert_eq!(client.contribution(&contributor), 50_000);
 }
+
+#[test]
+fn test_token_address_view() {
+    let (env, client, creator, token_address, _admin) = setup_env();
+
+    let deadline = env.ledger().timestamp() + 3600;
+    let goal: i128 = 1_000_000;
+    let min_contribution: i128 = 1_000;
+
+    client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
+
+    assert_eq!(client.token(), token_address);
+}

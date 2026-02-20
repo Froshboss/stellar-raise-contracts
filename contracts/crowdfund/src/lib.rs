@@ -299,4 +299,10 @@ impl CrowdfundContract {
     pub fn min_contribution(env: Env) -> i128 {
         env.storage().instance().get(&DataKey::MinContribution).unwrap()
     }
+
+    /// Returns the token contract address used for contributions.
+    pub fn token(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Token).unwrap()
+    }
+
 }
