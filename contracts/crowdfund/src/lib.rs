@@ -9,6 +9,9 @@ use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Str
 #[cfg(test)]
 mod test;
 
+#[cfg(test)]
+mod auth_tests;
+
 // ── Data Keys ───────────────────────────────────────────────────────────────
 
 /// Represents the campaign status.
