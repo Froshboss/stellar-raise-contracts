@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::{Address as _, Ledger}, token, Address, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger, Events}, token, Address, Env};
 
 use crate::{CrowdfundContract, CrowdfundContractClient};
 
@@ -113,7 +113,7 @@ fn test_contribute() {
     let contributor = Address::generate(&env);
     mint_to(&env, &token_address, &admin, &contributor, 500_000);
 
-    client.contribute(&contributor, &500_000);
+    client.contribute(&contributor, &500_000, &None);
 
     assert_eq!(client.total_raised(), 500_000);
     assert_eq!(client.contribution(&contributor), 500_000);
@@ -139,8 +139,8 @@ fn test_multiple_contributions() {
     mint_to(&env, &token_address, &admin, &alice, 600_000);
     mint_to(&env, &token_address, &admin, &bob, 400_000);
 
-    client.contribute(&alice, &600_000);
-    client.contribute(&bob, &400_000);
+    client.contribute(&alice, &600_000, &None);
+    client.contribute(&bob, &400_000, &None);
 
     assert_eq!(client.total_raised(), 1_000_000);
     assert_eq!(client.contribution(&alice), 600_000);
@@ -191,7 +191,7 @@ fn test_withdraw_after_goal_met() {
 
     let contributor = Address::generate(&env);
     mint_to(&env, &token_address, &admin, &contributor, 1_000_000);
-    client.contribute(&contributor, &1_000_000);
+    client.contribute(&contributor, &1_000_000, &None);
 
     assert_eq!(client.total_raised(), goal);
 
@@ -225,7 +225,7 @@ fn test_withdraw_before_deadline_panics() {
 
     let contributor = Address::generate(&env);
     mint_to(&env, &token_address, &admin, &contributor, 1_000_000);
-    client.contribute(&contributor, &1_000_000);
+    client.contribute(&contributor, &1_000_000, &None);
 
     let result = client.try_withdraw();
     
@@ -250,7 +250,7 @@ fn test_withdraw_goal_not_reached_panics() {
 
     let contributor = Address::generate(&env);
     mint_to(&env, &token_address, &admin, &contributor, 500_000);
-    client.contribute(&contributor, &500_000);
+    client.contribute(&contributor, &500_000, &None);
 
     // Move past deadline, but goal not met.
     env.ledger().set_timestamp(deadline + 1);
@@ -281,8 +281,8 @@ fn test_refund_single_when_goal_not_met() {
     mint_to(&env, &token_address, &admin, &alice, 300_000);
     mint_to(&env, &token_address, &admin, &bob, 200_000);
 
-    client.contribute(&alice, &300_000);
-    client.contribute(&bob, &200_000);
+    client.contribute(&alice, &300_000, &None);
+    client.contribute(&bob, &200_000, &None);
 
     // Move past deadline — goal not met.
     env.ledger().set_timestamp(deadline + 1);
@@ -314,7 +314,7 @@ fn test_refund_when_goal_reached_panics() {
 
     let contributor = Address::generate(&env);
     mint_to(&env, &token_address, &admin, &contributor, 1_000_000);
-    client.contribute(&contributor, &1_000_000);
+    client.contribute(&contributor, &1_000_000, &None);
 
     env.ledger().set_timestamp(deadline + 1);
 
@@ -636,7 +636,7 @@ fn test_double_withdraw_panics() {
 
     let contributor = Address::generate(&env);
     mint_to(&env, &token_address, &admin, &contributor, 1_000_000);
-    client.contribute(&contributor, &1_000_000);
+    client.contribute(&contributor, &1_000_000, &None);
 
     env.ledger().set_timestamp(deadline + 1);
 
@@ -662,7 +662,7 @@ fn test_double_refund_single_panics() {
 
     let alice = Address::generate(&env);
     mint_to(&env, &token_address, &admin, &alice, 500_000);
-    client.contribute(&alice, &500_000);
+    client.contribute(&alice, &500_000, &None);
 
     env.ledger().set_timestamp(deadline + 1);
 
@@ -710,8 +710,8 @@ fn test_cancel_with_contributions() {
     mint_to(&env, &token_address, &admin, &alice, 300_000);
     mint_to(&env, &token_address, &admin, &bob, 200_000);
 
-    client.contribute(&alice, &300_000);
-    client.contribute(&bob, &200_000);
+    client.contribute(&alice, &300_000, &None);
+    client.contribute(&bob, &200_000, &None);
 
     client.cancel();
 
