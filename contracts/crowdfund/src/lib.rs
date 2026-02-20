@@ -29,6 +29,16 @@ pub struct CampaignStats {
 
 #[derive(Clone)]
 #[contracttype]
+pub struct CampaignInfo {
+    pub creator: Address,
+    pub token: Address,
+    pub goal: i128,
+    pub deadline: u64,
+    pub total_raised: i128,
+}
+
+#[derive(Clone)]
+#[contracttype]
 pub enum DataKey {
     /// The address of the campaign creator.
     Creator,
@@ -309,6 +319,28 @@ impl CrowdfundContract {
     /// Returns the minimum contribution amount.
     pub fn min_contribution(env: Env) -> i128 {
         env.storage().instance().get(&DataKey::MinContribution).unwrap()
+    }
+
+    /// Returns the campaign creator's address.
+    pub fn creator(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Creator).unwrap()
+    }
+
+    /// Returns complete campaign information in a single call.
+    pub fn get_campaign_info(env: Env) -> CampaignInfo {
+        let creator: Address = env.storage().instance().get(&DataKey::Creator).unwrap();
+        let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let goal: i128 = env.storage().instance().get(&DataKey::Goal).unwrap();
+        let deadline: u64 = env.storage().instance().get(&DataKey::Deadline).unwrap();
+        let total_raised: i128 = env.storage().instance().get(&DataKey::TotalRaised).unwrap_or(0);
+
+        CampaignInfo {
+            creator,
+            token,
+            goal,
+            deadline,
+            total_raised,
+        }
     }
 
     /// Returns comprehensive campaign statistics.
