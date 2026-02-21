@@ -155,6 +155,84 @@ impl CrowdfundContract {
         }
     }
 
+    /// Withdraw a specific amount from the contributor's balance.
+    ///
+    /// Callable by the contributor only while the campaign is still active and
+    /// before the deadline.
+    pub fn withdraw_contribution(env: Env, contributor: Address, amount: i128) {
+        contributor.require_auth();
+
+        let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
+        if status != Status::Active {
+            panic!("campaign is not active");
+        }
+
+        let deadline: u64 = env.storage().instance().get(&DataKey::Deadline).unwrap();
+        if env.ledger().timestamp() > deadline {
+            panic!("campaign has ended");
+        }
+
+        let prev: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Contribution(contributor.clone()))
+            .unwrap_or(0);
+
+        if amount > prev {
+            panic!("insufficient balance");
+        }
+
+        let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token_client = token::Client::new(&env, &token_address);
+
+        // Transfer tokens back to the contributor.
+        token_client.transfer(&env.current_contract_address(), &contributor, &amount);
+
+        // Update contributor balance.
+        let new_balance = prev - amount;
+        if new_balance == 0 {
+            env.storage()
+                .instance()
+                .remove(&DataKey::Contribution(contributor.clone()));
+
+            // Remove from contributors list.
+            let mut contributors: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&DataKey::Contributors)
+                .unwrap();
+            let mut index = 0;
+            let mut found = false;
+            for c in contributors.iter() {
+                if c == contributor {
+                    found = true;
+                    break;
+                }
+                index += 1;
+            }
+            if found {
+                contributors.remove(index);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Contributors, &contributors);
+            }
+        } else {
+            env.storage()
+                .instance()
+                .set(&DataKey::Contribution(contributor.clone()), &new_balance);
+        }
+
+        // Update global total raised.
+        let total: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalRaised)
+            .unwrap();
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalRaised, &(total - amount));
+    }
+
     /// Withdraw raised funds — only callable by the creator after the
     /// deadline, and only if the goal has been met.
     pub fn withdraw(env: Env) {
