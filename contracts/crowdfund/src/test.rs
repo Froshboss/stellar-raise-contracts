@@ -1136,3 +1136,115 @@ fn test_add_to_whitelist_non_creator_panics() {
 
     client.add_to_whitelist(&soroban_sdk::vec![&env, alice]);
 }
+
+// ── Early Withdrawal Tests ──────────────────────────────────────────────────
+
+#[test]
+fn test_partial_withdrawal() {
+    let (env, client, creator, token_address, admin) = setup_env();
+
+    let deadline = env.ledger().timestamp() + 3600;
+    let goal: i128 = 1_000_000;
+    let min_contribution: i128 = 1_000;
+    client.initialize(
+        &creator,
+        &token_address,
+        &goal,
+        &deadline,
+        &min_contribution,
+    );
+
+    let contributor = Address::generate(&env);
+    mint_to(&env, &token_address, &admin, &contributor, 500_000);
+    client.contribute(&contributor, &500_000);
+
+    assert_eq!(client.total_raised(), 500_000);
+    assert_eq!(client.contribution(&contributor), 500_000);
+
+    // Partial withdrawal.
+    client.withdraw_contribution(&contributor, &200_000);
+
+    assert_eq!(client.total_raised(), 300_000);
+    assert_eq!(client.contribution(&contributor), 300_000);
+}
+
+#[test]
+fn test_full_withdrawal_removes_contributor() {
+    let (env, client, creator, token_address, admin) = setup_env();
+
+    let deadline = env.ledger().timestamp() + 3600;
+    let goal: i128 = 1_000_000;
+    let min_contribution: i128 = 1_000;
+    client.initialize(
+        &creator,
+        &token_address,
+        &goal,
+        &deadline,
+        &min_contribution,
+    );
+
+    let contributor = Address::generate(&env);
+    mint_to(&env, &token_address, &admin, &contributor, 500_000);
+    client.contribute(&contributor, &500_000);
+
+    let stats = client.get_stats();
+    assert_eq!(stats.contributor_count, 1);
+
+    // Full withdrawal.
+    client.withdraw_contribution(&contributor, &500_000);
+
+    assert_eq!(client.total_raised(), 0);
+    assert_eq!(client.contribution(&contributor), 0);
+
+    let stats_after = client.get_stats();
+    assert_eq!(stats_after.contributor_count, 0);
+}
+
+#[test]
+#[should_panic(expected = "insufficient balance")]
+fn test_withdraw_exceeding_balance_panics() {
+    let (env, client, creator, token_address, admin) = setup_env();
+
+    let deadline = env.ledger().timestamp() + 3600;
+    let goal: i128 = 1_000_000;
+    let min_contribution: i128 = 1_000;
+    client.initialize(
+        &creator,
+        &token_address,
+        &goal,
+        &deadline,
+        &min_contribution,
+    );
+
+    let contributor = Address::generate(&env);
+    mint_to(&env, &token_address, &admin, &contributor, 100_000);
+    client.contribute(&contributor, &100_000);
+
+    client.withdraw_contribution(&contributor, &100_001); // should panic
+}
+
+#[test]
+#[should_panic(expected = "campaign has ended")]
+fn test_withdraw_after_deadline_panics() {
+    let (env, client, creator, token_address, admin) = setup_env();
+
+    let deadline = env.ledger().timestamp() + 3600;
+    let goal: i128 = 1_000_000;
+    let min_contribution: i128 = 1_000;
+    client.initialize(
+        &creator,
+        &token_address,
+        &goal,
+        &deadline,
+        &min_contribution,
+    );
+
+    let contributor = Address::generate(&env);
+    mint_to(&env, &token_address, &admin, &contributor, 100_000);
+    client.contribute(&contributor, &100_000);
+
+    // Fast forward past deadline.
+    env.ledger().set_timestamp(deadline + 1);
+
+    client.withdraw_contribution(&contributor, &50_000); // should panic
+}
